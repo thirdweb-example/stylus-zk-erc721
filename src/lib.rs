@@ -6,11 +6,16 @@ use stylus_sdk::{
     prelude::*,
 };
 
+#[cfg(any(feature = "verifier", feature = "vkeys"))]
 use ark_bn254::{Bn254, Fq, Fr, G1Affine, G2Affine, Fq2};
+#[cfg(any(feature = "verifier", feature = "vkeys"))]
 use ark_ec::{AffineRepr, CurveGroup, pairing::Pairing};
+#[cfg(any(feature = "verifier", feature = "vkeys"))]
 use ark_ff::{PrimeField, Zero, BigInteger};
+#[cfg(any(feature = "verifier", feature = "vkeys"))]
+use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 
-sol! {
+sol_interface! {
     interface IERC721 {
         function balanceOf(address owner) external view returns (uint256 balance);
         function ownerOf(uint256 tokenId) external view returns (address owner);
@@ -22,6 +27,20 @@ sol! {
     }
 }
 
+sol_interface! {
+    interface IZKVerifier {
+        function verify_proof(bytes calldata proof_data, uint256[] calldata public_inputs) external view returns (bool);
+    }
+}
+
+sol_interface! {
+    interface IZKVKeys {
+        function get_verifying_key() external view returns (bytes memory);
+        function is_key_initialized() external view returns (bool);
+    }
+}
+
+#[cfg(feature = "legacy")]
 sol_storage! {
     #[entrypoint]
     pub struct ZKMintContract {
@@ -64,6 +83,7 @@ sol_storage! {
     }
 }
 
+#[cfg(any(feature = "verifier", feature = "vkeys"))]
 #[derive(Debug, Clone)]
 pub struct ZKProof {
     pub a: G1Affine,
@@ -71,6 +91,7 @@ pub struct ZKProof {
     pub c: G1Affine,
 }
 
+#[cfg(any(feature = "verifier", feature = "vkeys"))]
 #[derive(Debug, Clone)]
 pub struct VerifyingKey {
     pub alpha_g1: G1Affine,
@@ -80,6 +101,7 @@ pub struct VerifyingKey {
     pub gamma_abc_g1: Vec<G1Affine>,
 }
 
+#[cfg(any(feature = "verifier", feature = "vkeys"))]
 impl ZKProof {
     pub fn deserialize(data: &[u8]) -> Result<Self, &'static str> {
         if data.len() != 256 {
@@ -110,6 +132,7 @@ impl ZKProof {
     }
 }
 
+#[cfg(any(feature = "verifier", feature = "vkeys"))]
 impl VerifyingKey {
     pub fn deserialize(data: &[u8]) -> Result<Self, &'static str> {
         // Expected format: alpha_g1 (64) + beta_g2 (128) + gamma_g2 (128) + delta_g2 (128) + 
@@ -189,8 +212,469 @@ impl VerifyingKey {
             gamma_abc_g1,
         })
     }
+
+    pub fn serialize(&self) -> Vec<u8> {
+        let mut data = Vec::new();
+        
+        // Serialize alpha G1 (64 bytes)
+        let alpha_x_bytes = self.alpha_g1.x.into_bigint().to_bytes_be();
+        let alpha_y_bytes = self.alpha_g1.y.into_bigint().to_bytes_be();
+        data.extend_from_slice(&alpha_x_bytes[..32]);
+        data.extend_from_slice(&alpha_y_bytes[..32]);
+        
+        // Serialize beta G2 (128 bytes)
+        let beta_x0_bytes = self.beta_g2.x.c0.into_bigint().to_bytes_be();
+        let beta_x1_bytes = self.beta_g2.x.c1.into_bigint().to_bytes_be();
+        let beta_y0_bytes = self.beta_g2.y.c0.into_bigint().to_bytes_be();
+        let beta_y1_bytes = self.beta_g2.y.c1.into_bigint().to_bytes_be();
+        data.extend_from_slice(&beta_x0_bytes[..32]);
+        data.extend_from_slice(&beta_x1_bytes[..32]);
+        data.extend_from_slice(&beta_y0_bytes[..32]);
+        data.extend_from_slice(&beta_y1_bytes[..32]);
+        
+        // Serialize gamma G2 (128 bytes)
+        let gamma_x0_bytes = self.gamma_g2.x.c0.into_bigint().to_bytes_be();
+        let gamma_x1_bytes = self.gamma_g2.x.c1.into_bigint().to_bytes_be();
+        let gamma_y0_bytes = self.gamma_g2.y.c0.into_bigint().to_bytes_be();
+        let gamma_y1_bytes = self.gamma_g2.y.c1.into_bigint().to_bytes_be();
+        data.extend_from_slice(&gamma_x0_bytes[..32]);
+        data.extend_from_slice(&gamma_x1_bytes[..32]);
+        data.extend_from_slice(&gamma_y0_bytes[..32]);
+        data.extend_from_slice(&gamma_y1_bytes[..32]);
+        
+        // Serialize delta G2 (128 bytes)
+        let delta_x0_bytes = self.delta_g2.x.c0.into_bigint().to_bytes_be();
+        let delta_x1_bytes = self.delta_g2.x.c1.into_bigint().to_bytes_be();
+        let delta_y0_bytes = self.delta_g2.y.c0.into_bigint().to_bytes_be();
+        let delta_y1_bytes = self.delta_g2.y.c1.into_bigint().to_bytes_be();
+        data.extend_from_slice(&delta_x0_bytes[..32]);
+        data.extend_from_slice(&delta_x1_bytes[..32]);
+        data.extend_from_slice(&delta_y0_bytes[..32]);
+        data.extend_from_slice(&delta_y1_bytes[..32]);
+        
+        // Serialize gamma ABC length (4 bytes)
+        let gamma_abc_len = self.gamma_abc_g1.len() as u32;
+        data.extend_from_slice(&gamma_abc_len.to_be_bytes());
+        
+        // Serialize gamma ABC G1 points (64 * length bytes)
+        for point in &self.gamma_abc_g1 {
+            let x_bytes = point.x.into_bigint().to_bytes_be();
+            let y_bytes = point.y.into_bigint().to_bytes_be();
+            data.extend_from_slice(&x_bytes[..32]);
+            data.extend_from_slice(&y_bytes[..32]);
+        }
+        
+        data
+    }
 }
 
+//============================================================================
+// VERIFIER CONTRACT
+//============================================================================
+
+#[cfg(feature = "verifier")]
+sol_storage! {
+    #[entrypoint]
+    pub struct ZKVerifierContract {
+        address owner;
+        address vkeys_contract;
+    }
+}
+
+#[cfg(feature = "verifier")]
+#[public]
+impl ZKVerifierContract {
+    pub fn initialize(&mut self, vkeys_contract: Address) -> Result<(), Vec<u8>> {
+        if self.owner.get() != Address::ZERO {
+            return Err("Already initialized".into());
+        }
+        
+        self.owner.set(self.vm().msg_sender());
+        self.vkeys_contract.set(vkeys_contract);
+        Ok(())
+    }
+
+    pub fn verify_groth16(
+        &self,
+        proof_bytes: Vec<u8>,
+        public_inputs: Vec<U256>,
+    ) -> Result<bool, Vec<u8>> {
+        // Parse the ZK proof
+        let proof = ZKProof::deserialize(&proof_bytes)?;
+        
+        // Convert U256 public inputs to Fr
+        let mut fr_inputs = Vec::new();
+        for input in public_inputs.iter() {
+            let bytes: [u8; 32] = input.to_be_bytes();
+            let fr_input = Fr::from_be_bytes_mod_order(&bytes);
+            fr_inputs.push(fr_input);
+        }
+        
+        // Load verifying key from VKeys contract
+        let vk = self.load_verifying_key_from_contract()?;
+        
+        // Perform verification
+        self.groth16_verify(&proof, &vk, &fr_inputs)
+    }
+    
+    pub fn get_vkeys_contract(&self) -> Address {
+        self.vkeys_contract.get()
+    }
+}
+
+#[cfg(feature = "verifier")]
+impl ZKVerifierContract {
+    fn load_verifying_key_from_contract(&self) -> Result<VerifyingKey, Vec<u8>> {
+        let vkeys_address = self.vkeys_contract.get();
+        if vkeys_address == Address::ZERO {
+            return Err("VKeys contract not set".into());
+        }
+
+        // Check if the key is initialized
+        let vkeys_contract = IZKVKeys::from(vkeys_address);
+        let config = Call::new();
+        let is_initialized = vkeys_contract.is_key_initialized(self.vm(), config)?;
+        
+        if !is_initialized {
+            return Err("Verifying key not initialized in VKeys contract".into());
+        }
+
+        // Get the verifying key data
+        let config = Call::new();
+        let vk_data = vkeys_contract.get_verifying_key(self.vm(), config)?;
+        
+        // Deserialize the verifying key
+        VerifyingKey::deserialize(&vk_data).map_err(|e| format!("Failed to deserialize verifying key: {:?}", e).into())
+    }
+
+    fn groth16_verify(
+        &self,
+        proof: &ZKProof,
+        vk: &VerifyingKey,
+        public_inputs: &[Fr],
+    ) -> Result<bool, Vec<u8>> {
+        if public_inputs.len() + 1 != vk.gamma_abc_g1.len() {
+            return Err("Wrong number of public inputs".into());
+        }
+
+        // Compute vk_x = gamma_abc_g1[0] + sum(public_inputs[i] * gamma_abc_g1[i+1])
+        let mut vk_x = vk.gamma_abc_g1[0];
+        
+        for (i, input) in public_inputs.iter().enumerate() {
+            let gamma_abc_term = vk.gamma_abc_g1[i + 1].mul_bigint(input.into_bigint());
+            vk_x = (vk_x + gamma_abc_term.into_affine()).into();
+        }
+
+        // Perform pairing check: e(A, B) = e(alpha, beta) * e(vk_x, gamma) * e(C, delta)
+        // This is equivalent to: e(A, B) * e(-alpha, beta) * e(-vk_x, gamma) * e(-C, delta) = 1
+        
+        // Negate some points for the pairing check
+        let neg_alpha = -vk.alpha_g1;
+        let neg_vk_x = -vk_x;
+        let neg_c = -proof.c;
+
+        // Collect G1 and G2 points for multi-pairing
+        let g1_points = [proof.a, neg_alpha, neg_vk_x, neg_c];
+        let g2_points = [proof.b, vk.beta_g2, vk.gamma_g2, vk.delta_g2];
+
+        // The verification passes if the product of pairings equals 1 (identity element)
+        let result = Bn254::multi_pairing(&g1_points, &g2_points);
+        
+        Ok(result.is_zero())
+    }
+}
+
+//============================================================================
+// VKEYS CONTRACT  
+//============================================================================
+
+#[cfg(feature = "vkeys")]
+sol_storage! {
+    #[entrypoint]
+    pub struct ZKVKeysContract {
+        address owner;
+        
+        // Groth16 Verifying Key Storage
+        bool vk_initialized;
+        
+        // Alpha G1 point
+        bytes32 vk_alpha_g1_x;
+        bytes32 vk_alpha_g1_y;
+        
+        // Beta G2 point  
+        bytes32 vk_beta_g2_x0;
+        bytes32 vk_beta_g2_x1;
+        bytes32 vk_beta_g2_y0;
+        bytes32 vk_beta_g2_y1;
+        
+        // Gamma G2 point
+        bytes32 vk_gamma_g2_x0;
+        bytes32 vk_gamma_g2_x1;
+        bytes32 vk_gamma_g2_y0;
+        bytes32 vk_gamma_g2_y1;
+        
+        // Delta G2 point
+        bytes32 vk_delta_g2_x0;
+        bytes32 vk_delta_g2_x1;
+        bytes32 vk_delta_g2_y0;
+        bytes32 vk_delta_g2_y1;
+        
+        // Gamma ABC G1 points (for public inputs)
+        uint256 vk_gamma_abc_length;
+        mapping(uint256 => bytes32) vk_gamma_abc_g1_x;
+        mapping(uint256 => bytes32) vk_gamma_abc_g1_y;
+    }
+}
+
+#[cfg(feature = "vkeys")]
+#[public]
+impl ZKVKeysContract {
+    pub fn initialize(&mut self) -> Result<(), Vec<u8>> {
+        if self.owner.get() != Address::ZERO {
+            return Err("Already initialized".into());
+        }
+        
+        self.owner.set(self.vm().msg_sender());
+        Ok(())
+    }
+
+    pub fn set_verifying_key(&mut self, vk_data: Vec<u8>) -> Result<(), Vec<u8>> {
+        if self.vm().msg_sender() != self.owner.get() {
+            return Err("Only owner can set verifying key".into());
+        }
+
+        let vk = VerifyingKey::deserialize(&vk_data)?;
+
+        // Store alpha G1
+        let alpha_x_bytes: [u8; 32] = vk.alpha_g1.x.into_bigint().to_bytes_be().try_into().unwrap();
+        let alpha_y_bytes: [u8; 32] = vk.alpha_g1.y.into_bigint().to_bytes_be().try_into().unwrap();
+        self.vk_alpha_g1_x.set(alpha_x_bytes.into());
+        self.vk_alpha_g1_y.set(alpha_y_bytes.into());
+
+        // Store beta G2
+        let beta_x0_bytes: [u8; 32] = vk.beta_g2.x.c0.into_bigint().to_bytes_be().try_into().unwrap();
+        let beta_x1_bytes: [u8; 32] = vk.beta_g2.x.c1.into_bigint().to_bytes_be().try_into().unwrap();
+        let beta_y0_bytes: [u8; 32] = vk.beta_g2.y.c0.into_bigint().to_bytes_be().try_into().unwrap();
+        let beta_y1_bytes: [u8; 32] = vk.beta_g2.y.c1.into_bigint().to_bytes_be().try_into().unwrap();
+        self.vk_beta_g2_x0.set(beta_x0_bytes.into());
+        self.vk_beta_g2_x1.set(beta_x1_bytes.into());
+        self.vk_beta_g2_y0.set(beta_y0_bytes.into());
+        self.vk_beta_g2_y1.set(beta_y1_bytes.into());
+
+        // Store gamma G2
+        let gamma_x0_bytes: [u8; 32] = vk.gamma_g2.x.c0.into_bigint().to_bytes_be().try_into().unwrap();
+        let gamma_x1_bytes: [u8; 32] = vk.gamma_g2.x.c1.into_bigint().to_bytes_be().try_into().unwrap();
+        let gamma_y0_bytes: [u8; 32] = vk.gamma_g2.y.c0.into_bigint().to_bytes_be().try_into().unwrap();
+        let gamma_y1_bytes: [u8; 32] = vk.gamma_g2.y.c1.into_bigint().to_bytes_be().try_into().unwrap();
+        self.vk_gamma_g2_x0.set(gamma_x0_bytes.into());
+        self.vk_gamma_g2_x1.set(gamma_x1_bytes.into());
+        self.vk_gamma_g2_y0.set(gamma_y0_bytes.into());
+        self.vk_gamma_g2_y1.set(gamma_y1_bytes.into());
+
+        // Store delta G2
+        let delta_x0_bytes: [u8; 32] = vk.delta_g2.x.c0.into_bigint().to_bytes_be().try_into().unwrap();
+        let delta_x1_bytes: [u8; 32] = vk.delta_g2.x.c1.into_bigint().to_bytes_be().try_into().unwrap();
+        let delta_y0_bytes: [u8; 32] = vk.delta_g2.y.c0.into_bigint().to_bytes_be().try_into().unwrap();
+        let delta_y1_bytes: [u8; 32] = vk.delta_g2.y.c1.into_bigint().to_bytes_be().try_into().unwrap();
+        self.vk_delta_g2_x0.set(delta_x0_bytes.into());
+        self.vk_delta_g2_x1.set(delta_x1_bytes.into());
+        self.vk_delta_g2_y0.set(delta_y0_bytes.into());
+        self.vk_delta_g2_y1.set(delta_y1_bytes.into());
+
+        // Store gamma ABC length and points
+        self.vk_gamma_abc_length.set(U256::from(vk.gamma_abc_g1.len()));
+        for (i, point) in vk.gamma_abc_g1.iter().enumerate() {
+            let x_bytes: [u8; 32] = point.x.into_bigint().to_bytes_be().try_into().unwrap();
+            let y_bytes: [u8; 32] = point.y.into_bigint().to_bytes_be().try_into().unwrap();
+            self.vk_gamma_abc_g1_x.setter(U256::from(i)).set(x_bytes.into());
+            self.vk_gamma_abc_g1_y.setter(U256::from(i)).set(y_bytes.into());
+        }
+
+        self.vk_initialized.set(true);
+        Ok(())
+    }
+
+    pub fn get_verifying_key(&self) -> Result<Vec<u8>, Vec<u8>> {
+        if !self.vk_initialized.get() {
+            return Err("Verifying key not initialized".into());
+        }
+
+        // Reconstruct alpha G1
+        let alpha_x_bytes: [u8; 32] = self.vk_alpha_g1_x.get().into();
+        let alpha_y_bytes: [u8; 32] = self.vk_alpha_g1_y.get().into();
+        let alpha_x = Fq::from_be_bytes_mod_order(&alpha_x_bytes);
+        let alpha_y = Fq::from_be_bytes_mod_order(&alpha_y_bytes);
+        let alpha_g1 = G1Affine::new(alpha_x, alpha_y);
+
+        // Reconstruct beta G2
+        let beta_x0_bytes: [u8; 32] = self.vk_beta_g2_x0.get().into();
+        let beta_x1_bytes: [u8; 32] = self.vk_beta_g2_x1.get().into();
+        let beta_y0_bytes: [u8; 32] = self.vk_beta_g2_y0.get().into();
+        let beta_y1_bytes: [u8; 32] = self.vk_beta_g2_y1.get().into();
+        let beta_x0 = Fq::from_be_bytes_mod_order(&beta_x0_bytes);
+        let beta_x1 = Fq::from_be_bytes_mod_order(&beta_x1_bytes);
+        let beta_y0 = Fq::from_be_bytes_mod_order(&beta_y0_bytes);
+        let beta_y1 = Fq::from_be_bytes_mod_order(&beta_y1_bytes);
+        let beta_g2 = G2Affine::new(Fq2::new(beta_x0, beta_x1), Fq2::new(beta_y0, beta_y1));
+
+        // Reconstruct gamma G2
+        let gamma_x0_bytes: [u8; 32] = self.vk_gamma_g2_x0.get().into();
+        let gamma_x1_bytes: [u8; 32] = self.vk_gamma_g2_x1.get().into();
+        let gamma_y0_bytes: [u8; 32] = self.vk_gamma_g2_y0.get().into();
+        let gamma_y1_bytes: [u8; 32] = self.vk_gamma_g2_y1.get().into();
+        let gamma_x0 = Fq::from_be_bytes_mod_order(&gamma_x0_bytes);
+        let gamma_x1 = Fq::from_be_bytes_mod_order(&gamma_x1_bytes);
+        let gamma_y0 = Fq::from_be_bytes_mod_order(&gamma_y0_bytes);
+        let gamma_y1 = Fq::from_be_bytes_mod_order(&gamma_y1_bytes);
+        let gamma_g2 = G2Affine::new(Fq2::new(gamma_x0, gamma_x1), Fq2::new(gamma_y0, gamma_y1));
+
+        // Reconstruct delta G2
+        let delta_x0_bytes: [u8; 32] = self.vk_delta_g2_x0.get().into();
+        let delta_x1_bytes: [u8; 32] = self.vk_delta_g2_x1.get().into();
+        let delta_y0_bytes: [u8; 32] = self.vk_delta_g2_y0.get().into();
+        let delta_y1_bytes: [u8; 32] = self.vk_delta_g2_y1.get().into();
+        let delta_x0 = Fq::from_be_bytes_mod_order(&delta_x0_bytes);
+        let delta_x1 = Fq::from_be_bytes_mod_order(&delta_x1_bytes);
+        let delta_y0 = Fq::from_be_bytes_mod_order(&delta_y0_bytes);
+        let delta_y1 = Fq::from_be_bytes_mod_order(&delta_y1_bytes);
+        let delta_g2 = G2Affine::new(Fq2::new(delta_x0, delta_x1), Fq2::new(delta_y0, delta_y1));
+
+        // Reconstruct gamma ABC G1 points
+        let gamma_abc_length = self.vk_gamma_abc_length.get();
+        let mut gamma_abc_g1 = Vec::new();
+        
+        for i in 0..gamma_abc_length.as_limbs()[0] as u32 {
+            let x_bytes: [u8; 32] = self.vk_gamma_abc_g1_x.get(U256::from(i)).into();
+            let y_bytes: [u8; 32] = self.vk_gamma_abc_g1_y.get(U256::from(i)).into();
+            let x = Fq::from_be_bytes_mod_order(&x_bytes);
+            let y = Fq::from_be_bytes_mod_order(&y_bytes);
+            let point = G1Affine::new(x, y);
+            gamma_abc_g1.push(point);
+        }
+
+        // Create the VerifyingKey struct
+        let vk = VerifyingKey {
+            alpha_g1,
+            beta_g2,
+            gamma_g2,
+            delta_g2,
+            gamma_abc_g1,
+        };
+
+        // Serialize the verifying key
+        let vk_bytes = vk.serialize();
+        
+        Ok(vk_bytes)
+    }
+    
+    pub fn is_verifying_key_set(&self) -> bool {
+        self.vk_initialized.get()
+    }
+    
+    pub fn is_key_initialized(&self) -> bool {
+        self.vk_initialized.get()
+    }
+}
+
+//============================================================================
+// NFT CONTRACT
+//============================================================================
+
+#[cfg(feature = "nft")]
+sol_storage! {
+    #[entrypoint]
+    pub struct ZKMintNFTContract {
+        address owner;
+        uint256 next_token_id;
+        mapping(uint256 => address) token_owners;
+        mapping(address => uint256) token_balances;
+        mapping(uint256 => address) token_approvals;
+        mapping(address => mapping(address => bool)) operator_approvals;
+        
+        // External contract addresses
+        address verifier_contract;
+        address vkeys_contract;
+    }
+}
+
+#[cfg(feature = "nft")]
+#[public]
+impl ZKMintNFTContract {
+    pub fn initialize(&mut self, verifier_contract: Address, vkeys_contract: Address) -> Result<(), Vec<u8>> {
+        if self.owner.get() != Address::ZERO {
+            return Err("Already initialized".into());
+        }
+        
+        self.owner.set(self.vm().msg_sender());
+        self.next_token_id.set(U256::from(1));
+        self.verifier_contract.set(verifier_contract);
+        self.vkeys_contract.set(vkeys_contract);
+        Ok(())
+    }
+
+    pub fn mint_with_zk_proof(
+        &mut self,
+        to: Address,
+        proof_data: Vec<u8>,
+        public_inputs: Vec<U256>,
+    ) -> Result<U256, Vec<u8>> {
+        let verifier_address = self.verifier_contract.get();
+        if verifier_address == Address::ZERO {
+            return Err("Verifier contract not set".into());
+        }
+
+        // Call the verifier contract to verify the ZK proof
+        let verifier = IZKVerifier::from(verifier_address);
+        let config = Call::new();
+        let is_valid = verifier.verify_proof(self.vm(), config, proof_data.into(), public_inputs)?;
+        
+        if !is_valid {
+            return Err("Invalid ZK proof".into());
+        }
+
+        // Mint the NFT
+        let token_id = self.next_token_id.get();
+        self.token_owners.setter(token_id).set(to);
+        
+        let current_balance = self.token_balances.getter(to).get();
+        self.token_balances.setter(to).set(current_balance + U256::from(1));
+        
+        self.next_token_id.set(token_id + U256::from(1));
+        
+        Ok(token_id)
+    }
+
+    // Standard ERC721 view functions
+    pub fn balance_of(&self, owner: Address) -> U256 {
+        self.token_balances.getter(owner).get()
+    }
+
+    pub fn owner_of(&self, token_id: U256) -> Result<Address, Vec<u8>> {
+        let owner = self.token_owners.getter(token_id).get();
+        if owner == Address::ZERO {
+            return Err("Token does not exist".into());
+        }
+        Ok(owner)
+    }
+
+    pub fn get_next_token_id(&self) -> U256 {
+        self.next_token_id.get()
+    }
+    
+    pub fn get_verifier_contract(&self) -> Address {
+        self.verifier_contract.get()
+    }
+    
+    pub fn get_vkeys_contract(&self) -> Address {
+        self.vkeys_contract.get()
+    }
+}
+
+//============================================================================
+// LEGACY CONTRACT (feature-gated to not conflict)
+//============================================================================
+
+#[cfg(feature = "legacy")]
 #[public]
 impl ZKMintContract {
     #[payable]
@@ -365,6 +849,7 @@ impl ZKMintContract {
     }
 }
 
+#[cfg(feature = "legacy")]
 impl ZKMintContract {
     /// Load verifying key from storage
     fn load_verifying_key(&self) -> Result<VerifyingKey, Vec<u8>> {

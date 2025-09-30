@@ -25,6 +25,10 @@ stylus-sdk = { version = "0.10.0-beta.1", features = ["stylus-test"] }
 serde_json = "1"
 
 [features]
+default = []
+nft = []
+verifier = []
+vkeys = []
 export-abi = ["stylus-sdk/export-abi"]
 debug = ["stylus-sdk/debug"]
 
