@@ -11,11 +11,6 @@ dotenv = "0.15.0"
 hex = "0.4.3"
 mini-alloc = "1.0.0"
 stylus-sdk = "0.10.0-beta.1"
-ark-ec = { version = "0.4.0", default-features = false }
-ark-ff = { version = "0.4.0", default-features = false }
-ark-groth16 = { version = "0.4.0", default-features = false }
-ark-bn254 = { version = "0.4.0", default-features = false, features = ["curve"] }
-ark-serialize = { version = "0.4.0", default-features = false }
 
 [dev-dependencies]
 tokio = { version = "1.12.0", features = ["full"] }

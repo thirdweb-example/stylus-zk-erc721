@@ -1,0 +1,52 @@
+{
+  "name": "zk-mint-template",
+  "version": "1.0.0",
+  "description": "Complete ZK-proof NFT minting template with Arbitrum Stylus contracts",
+  "private": true,
+  "packageManager": "pnpm@8.0.0",
+  "engines": {
+    "node": ">=20.18.0"
+  },
+  "scripts": {
+    "setup": "./setup.sh",
+    "dev": "pnpm --filter app dev",
+    "build": "pnpm run setup",
+    "build:circuits": "pnpm --filter circuits build",
+    "build:app": "pnpm --filter app build",
+    "build:contracts": "cd contracts && cargo build --release",
+    "deploy:contracts": "cd contracts && cargo stylus deploy --endpoint arbitrum-sepolia",
+    "deploy:app": "pnpm --filter app deploy",
+    "test": "pnpm run test:contracts && pnpm run test:app",
+    "test:contracts": "cd contracts && cargo test",
+    "test:app": "pnpm --filter app test",
+    "clean": "pnpm --filter circuits clean && pnpm --filter app clean && cd contracts && cargo clean",
+    "lint": "pnpm --filter app lint",
+    "typecheck": "pnpm --filter app type-check"
+  },
+  "workspaces": [
+    "circuits",
+    "app"
+  ],
+  "devDependencies": {
+    "@types/node": "^20.0.0"
+  },
+  "keywords": [
+    "zk-proofs",
+    "nft",
+    "arbitrum",
+    "stylus",
+    "groth16",
+    "privacy",
+    "thirdweb"
+  ],
+  "author": "Your Name",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/yourusername/zk-mint-template.git"
+  },
+  "bugs": {
+    "url": "https://github.com/yourusername/zk-mint-template/issues"
+  },
+  "homepage": "https://github.com/yourusername/zk-mint-template#readme"
+}
