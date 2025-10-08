@@ -52,6 +52,8 @@ stylus-zk-mint/
    # Copy the deployed contract address
    ```
 
+   Arkworks address: 0x2e9e7b36619fed922da9e54ccb0873d4a0bc6594 (Arbitrum Sepolia)
+
 4. **Update app configuration**:
 
    ```bash

@@ -8,6 +8,15 @@ use stylus_sdk::{
 
 mod verifying_key;
 
+// Interface for arkworks BN254 operations contract
+sol_interface! {
+    interface IArkworksBN254 {
+        function pairing(uint8[] calldata input) external view returns (uint8[] memory);
+        function ecadd(uint8[] calldata input) external view returns (uint8[] memory);
+        function ecmul(uint8[] calldata input) external view returns (uint8[] memory);
+    }
+}
+
 // Raw byte types for EVM precompiles - no arkworks needed!
 type G1Point = [u8; 64];   // 32 bytes x + 32 bytes y
 type G2Point = [u8; 128];  // 32 bytes x0 + 32 bytes x1 + 32 bytes y0 + 32 bytes y1
@@ -25,8 +34,8 @@ const EC_PAIRING_PRECOMPILE: u8 = 0x08;
 pub struct PrecompileBackend;
 
 impl PrecompileBackend {
-    /// Call ecAdd precompile for G1 point addition
-    pub fn ec_add(host: &dyn stylus_sdk::prelude::Host, a: &G1Point, b: &G1Point) -> Result<G1Point, Vec<u8>> {
+    /// Call ecAdd using arkworks contract for G1 point addition
+    pub fn ec_add(host: &dyn stylus_sdk::prelude::Host, arkworks_address: Address, a: &G1Point, b: &G1Point) -> Result<G1Point, Vec<u8>> {
         if Self::is_g1_zero(a) {
             return Ok(*b);
         }
@@ -39,12 +48,12 @@ impl PrecompileBackend {
         calldata[0..64].copy_from_slice(a);
         calldata[64..128].copy_from_slice(b);
         
-        // Call ecAdd precompile
-        let result = unsafe {
-            RawCall::new(host)
-                .call(Address::with_last_byte(EC_ADD_PRECOMPILE), &calldata)
-                .map_err(|_| "ecAdd precompile failed".as_bytes().to_vec())?
-        };
+        // Call arkworks ecadd
+        let arkworks_contract = IArkworksBN254::from(arkworks_address);
+        let config = Call::new();
+        let result = arkworks_contract
+            .ecadd(host, config, calldata.to_vec())
+            .map_err(|_| "ecAdd failed".as_bytes().to_vec())?;
         
         // Return result as G1Point
         if result.len() != 64 {
@@ -55,8 +64,8 @@ impl PrecompileBackend {
         Ok(point)
     }
     
-    /// Call ecMul precompile for G1 scalar multiplication
-    pub fn ec_mul(host: &dyn stylus_sdk::prelude::Host, scalar: &Scalar, point: &G1Point) -> Result<G1Point, Vec<u8>> {
+    /// Call ecMul using arkworks contract for G1 scalar multiplication
+    pub fn ec_mul(host: &dyn stylus_sdk::prelude::Host, arkworks_address: Address, scalar: &Scalar, point: &G1Point) -> Result<G1Point, Vec<u8>> {
         if Self::is_scalar_zero(scalar) || Self::is_g1_zero(point) {
             return Ok([0u8; 64]); // Zero point
         }
@@ -66,12 +75,12 @@ impl PrecompileBackend {
         calldata[0..64].copy_from_slice(point);
         calldata[64..96].copy_from_slice(scalar);
         
-        // Call ecMul precompile
-        let result = unsafe {
-            RawCall::new(host)
-                .call(Address::with_last_byte(EC_MUL_PRECOMPILE), &calldata)
-                .map_err(|_| "ecMul precompile failed".as_bytes().to_vec())?
-        };
+        // Call arkworks ecmul
+        let arkworks_contract = IArkworksBN254::from(arkworks_address);
+        let config = Call::new();
+        let result = arkworks_contract
+            .ecmul(host, config, calldata.to_vec())
+            .map_err(|_| "ecMul failed".as_bytes().to_vec())?;
         
         // Return result as G1Point
         if result.len() != 64 {
@@ -278,15 +287,19 @@ sol_storage! {
         
         // Nullifier tracking to prevent replay attacks
         mapping(uint256 => bool) used_nullifiers;
+        
+        // Arkworks pairing contract address (for custom pairing backend)
+        address arkworks_pairing_contract;
     }
 }
 
 #[public]
 impl ZKMintContract {
     #[constructor]
-    pub fn constructor(&mut self, owner: Address) -> Result<(), Vec<u8>> {
+    pub fn constructor(&mut self, owner: Address, arkworks_pairing_contract: Address) -> Result<(), Vec<u8>> {
         self.owner.set(owner);
         self.next_token_id.set(U256::from(1));
+        self.arkworks_pairing_contract.set(arkworks_pairing_contract);
 
         self.set_hardcoded_verifying_key()?;
 
@@ -532,10 +545,11 @@ impl ZKMintContract {
         let mut vk_x = vk.gamma_abc_g1[0];
         
         // Multiply each public input by its corresponding gamma_abc coefficient and add to vk_x
+        let arkworks_address = self.arkworks_pairing_contract.get();
         for (i, input) in public_inputs.iter().enumerate() {
             if i + 1 < vk.gamma_abc_g1.len() {
-                let gamma_abc_term = PrecompileBackend::ec_mul(&*self.vm(), input, &vk.gamma_abc_g1[i + 1])?;
-                vk_x = PrecompileBackend::ec_add(&*self.vm(), &vk_x, &gamma_abc_term)?;
+                let gamma_abc_term = PrecompileBackend::ec_mul(&*self.vm(), arkworks_address, input, &vk.gamma_abc_g1[i + 1])?;
+                vk_x = PrecompileBackend::ec_add(&*self.vm(), arkworks_address, &vk_x, &gamma_abc_term)?;
             }
         }
 
@@ -558,16 +572,12 @@ impl ZKMintContract {
         calldata[576..640].copy_from_slice(&neg_c);
         calldata[640..768].copy_from_slice(&vk.delta_g2);
         
-        // Call ecPairing precompile with all 4 pairs
-        let result = unsafe {
-            RawCall::new(self.vm())
-                .call(Address::with_last_byte(EC_PAIRING_PRECOMPILE), &calldata)
-                .map_err(|e| {
-                    let mut err_msg = b"ecPairing precompile failed: ".to_vec();
-                    err_msg.extend_from_slice(&format!("{:?}", e).as_bytes());
-                    err_msg
-                })?
-        };
+        // Call arkworks pairing contract with all 4 pairs
+        let arkworks_contract = IArkworksBN254::from(self.arkworks_pairing_contract.get());
+        let config = Call::new();
+        let result = arkworks_contract
+            .pairing(self.vm(), config, calldata.to_vec())
+            .map_err(|_| b"Pairing failed".to_vec())?;
         
         // Result is 32 bytes, return true if last byte is 1
         Ok(result.len() == 32 && result[31] == 1)
