@@ -4157,21 +4157,23 @@ dependencies = [
 
 [[package]]
 name = "stylus-core"
-version = "0.10.0-beta.1"
+version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3ecfdc2ff65f8a5fc13e4525a0eab323b0f37fbb259a44809a270190ba405d52"
+checksum = "8f164b490b2541dc58535c914cba9d0b11901b33cd39b9d86fe0da1234844823"
 dependencies = [
  "alloy-primitives",
  "alloy-sol-types",
  "cfg-if",
  "dyn-clone",
+ "lazy_static",
+ "regex",
 ]
 
 [[package]]
 name = "stylus-proc"
-version = "0.10.0-beta.1"
+version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "16181d192805d501c94071f7e2d569f574921e39ba25291d2805896979bd514c"
+checksum = "f69dcf078b332c89a3b7f36c9e49c7aa33be82f1bc93b97923df47816896cebc"
 dependencies = [
  "alloy-primitives",
  "alloy-sol-types",
@@ -4183,6 +4185,7 @@ dependencies = [
  "quote",
  "regex",
  "sha3",
+ "stylus-core",
  "syn 2.0.104",
  "syn-solidity",
  "trybuild",
@@ -4190,31 +4193,30 @@ dependencies = [
 
 [[package]]
 name = "stylus-sdk"
-version = "0.10.0-beta.1"
+version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5038d72062400c4b92ccc9b7c1f57f0eb36b7e0132a10efa22795b1d3472ed9a"
+checksum = "29d4287eb49568e7f6d282f4ff8a3c800b0a9d9480cf5bb86236cfe55178609b"
 dependencies = [
  "alloy-primitives",
  "alloy-sol-types",
+ "branches",
  "cfg-if",
  "clap",
  "derivative",
  "hex",
  "keccak-const",
- "lazy_static",
  "mini-alloc",
  "rclite",
- "regex",
+ "ruint",
  "stylus-core",
  "stylus-proc",
- "stylus-test",
 ]
 
 [[package]]
 name = "stylus-test"
-version = "0.10.0-beta.1"
+version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6562f7b12252ba564e76cffe306dd030937a03c3cd6816d508760e651e7a0c85"
+checksum = "f02ee6476bd99db801ffb5d1800a2db464613b3598f186cb33d35997a0602463"
 dependencies = [
  "alloy-primitives",
  "alloy-provider",
@@ -4237,6 +4239,7 @@ dependencies = [
  "mini-alloc",
  "serde_json",
  "stylus-sdk",
+ "stylus-test",
  "tokio",
 ]
 
