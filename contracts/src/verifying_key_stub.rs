@@ -1,12 +1,17 @@
 // PLACEHOLDER verifying key implementation
-// This file serves as a template and gets copied to verifying_key.rs initially
-// The setup.sh script will overwrite verifying_key.rs with the actual verification key
+// The setup.sh script will overwrite this file with the actual verification key
 // DO NOT EDIT - This is just a stub to allow compilation before setup
 
-use crate::ZKMintContract;
+use alloc::vec;
+use alloc::vec::Vec;
+use crate::VerifyingKey;
 
-impl ZKMintContract {
-    pub fn set_hardcoded_verifying_key(&mut self) -> Result<(), Vec<u8>> {
-        Err("Verifying key not initialized. Please run ./setup.sh first to generate the verification key.".into())
+pub fn get_verifying_key() -> VerifyingKey {
+    VerifyingKey {
+        alpha_g1: [0u8; 64],
+        beta_g2: [0u8; 128],
+        gamma_g2: [0u8; 128],
+        delta_g2: [0u8; 128],
+        gamma_abc_g1: vec![[0u8; 64]; 2],
     }
 }
